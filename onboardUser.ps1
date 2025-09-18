@@ -1,3 +1,6 @@
+# To do:
+#	- Multiple groups
+# 
 # ===============================================================
 # Prerequisites (manual setup required before running this script)
 # ===============================================================
@@ -5,7 +8,7 @@
 #      BW_CLIENTID     = your Bitwarden Client ID
 #      BW_CLIENTSECRET = your Bitwarden Client Secret
 #
-#    Example (one-time setup per machine/user):
+#    Then run these commands - You only need to do this once:
 #      [System.Environment]::SetEnvironmentVariable("BW_CLIENTID","<your-client-id>","User")
 #      [System.Environment]::SetEnvironmentVariable("BW_CLIENTSECRET","<your-client-secret>","User")
 #
@@ -14,30 +17,17 @@
 #      - Create users
 #      - Assign licenses
 #      - Add users to groups
+#
+# Note: If either the AzureAD or the bw modules aren't installed, the script will install them but you may need to restart the terminal and rerun the script.
 # ===============================================================
 
 # AzureAD module check/install
 $global:AzModule = $null
 
-if (-not (Get-Module -ListAvailable -Name AzureAD)) {
-    Write-Host "AzureAD module not found. Installing..." -ForegroundColor Yellow
-    try {
-        Install-Module AzureAD -Force -Scope CurrentUser -ErrorAction Stop
-    }
-    catch {
-        Write-Host "AzureAD module failed to install. Please install manually with 'Install-Module AzureAD' and rerun the script." -ForegroundColor Red
-        exit 1
-    }
-
-    # Verify install succeeded
-    if (-not (Get-Module -ListAvailable -Name AzureAD)) {
-        Write-Host "AzureAD module could not be found even after install. Aborting." -ForegroundColor Red
-        exit 1
-    } else {
-        $global:AzModule = "AzureAD"
-        Write-Host "AzureAD module installed successfully." -ForegroundColor Green
-    }
-} else {
+if (-not (Get-Module -ListAvailable AzureAD)) {
+    Write-Host "Installing AzureAD module..."
+    Install-Module AzureAD -Force -Scope CurrentUser
+}else {
     $global:AzModule = "AzureAD"
 }
 
@@ -45,22 +35,9 @@ if (-not (Get-Module -ListAvailable -Name AzureAD)) {
 $global:BwExe = $null
 
 if (-not (Get-Command bw -ErrorAction SilentlyContinue)) {
-    Write-Host "Bitwarden CLI not found. Installing..." -ForegroundColor Yellow
-    winget install Bitwarden.CLI --silent --accept-source-agreements --accept-package-agreements
-
-# Rather then having to reload the terminal to use bw, let's find the path and store it for later
-
-    # Try to locate bw.exe
-    $bwExe = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter "bw.exe" -ErrorAction SilentlyContinue | 
-             Select-Object -First 1 -ExpandProperty FullName
-
-    if ($bwExe) {
-        $global:BwExe = $bwExe
-        Write-Host "Found Bitwarden CLI at: $bwExe" -ForegroundColor Green
-    }  else {
-        Write-Host "Bitwarden CLI was installed but could not be located. Please restart your terminal and rerun the script,or install manually." -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "Installing Bitwarden CLI..."
+    winget install Bitwarden.CLI --accept-source-agreements --accept-package-agreements
+    Write-Host "'bw' has just been installed and thus would likely be unavailable to use until the terminal is restarted"
 } else {
     # If already in PATH, just use the command
     $global:BwExe = "bw"
@@ -70,29 +47,6 @@ Import-Module AzureAD
 
 # Connect to Azure AD
 Connect-AzureAD
-
-# Generate password - I intend to do this via Bitwarden post-demo
-function New-CustomPassword {
-    $wordList = @(
-        "Apple","Banana","Carrot","Dragon","Eagle","Falcon","Guitar",
-        "Hammer","Island","Jungle","Kite","Lemon","Monkey","Needle",
-        "Orange","Piano","Plane","Queen","Rocket","Snake","Tiger","Tower","Umbrella",
-        "Violet","Wolf","Xylophone","Yak","Zebra","Triangle","Square","Circle","Axe",
-        "Bear","Cat","Dog","Lion","Shark","Dolphin","Horse","Fox","Whale",
-        "Otter","Rabbit","Cobra","Rhino","Cheetah","Panther","Moose",
-        "Chair","Table","Laptop","Phone","Bottle","Camera","Wallet","Ticket","Bridge","Clock",
-        "Book","Shield","Helmet","Anchor","Lantern","Compass","Candle","Brush","Drill",
-        "Mountain","River","Forest","Desert","Ocean","Valley","Canyon","Harbor","Beach",
-        "Storm","Cloud","Sunset","Rainbow","Volcano","Glacier","Prairie","Savanna",
-        "Pixel","Orbit","Galaxy","Meteor","Planet","Nebula","Star","Astro","Comet","Nova",
-        "Hero","Wizard","Knight","Castle","Crown","Sword","Potion","Treasure","Key"
-    )
-    $words = Get-Random -InputObject $wordList -Count 3
-    $indexForNumber = Get-Random -Minimum 0 -Maximum 3
-    $number = Get-Random -Minimum 1 -Maximum 99
-    $words[$indexForNumber] = $words[$indexForNumber] + $number
-    return ($words -join "-")
-}
 
 # Mapping table for friendly license names
 $SKUNames = @{
@@ -147,7 +101,8 @@ for ($i=0; $i -lt $availableSKUs.Count; $i++) {
     $friendly = $SKUNames[$part]
     if (-not $friendly) { $friendly = "Unknown / Unmapped" }
     $available = $availableSKUs[$i].Available
-    Write-Host ("[{0}] {1} ({2}) - {3} available" -f $i, $part, $friendly, $available)
+
+    Write-Host "[$i] $part ($friendly) - $available available"
 }
 $SKUChoice = Read-Host "Choose a license number or press enter to leave unlicensed"
 
@@ -157,15 +112,19 @@ $availableGroups = Get-AzureADGroup | Select-Object DisplayName, ObjectId
 for ($i=0; $i -lt $availableGroups.Count; $i++) {
     Write-Host "[$i] $($availableGroups[$i].DisplayName)"
 }
-$groupChoice = Read-Host "OPTIONAL: Choose a group number"
+$groupChoice = Read-Host "OPTIONAL: Enter a comma-seperated list of groups to add $FirstName to"
 $GroupId = $null
-if ($groupChoice -match '^\d+$') {
-    $GroupId = $availableGroups[$groupChoice].ObjectId
-    $GroupName = $availableGroups[$groupChoice].DisplayName
+$numbers = @($groupChoice -split "," | ForEach-Object { [int]$_ })
+$GroupIdList = New-Object System.Collections.Generic.List[string]
+$GroupNameList = New-Object System.Collections.Generic.List[string]
+foreach ($n in $numbers) {
+$GroupIdList.Add($availableGroups[$n].ObjectId)
+$GroupNameList.Add($availableGroups[$n].DisplayName)
+
 }
 
 # Generate password
-$generatedPassword = New-CustomPassword
+$generatedPassword = & $BwExe generate --passphrase --words 3 --separator "-" --capitalize --includeNumber
 $passwordProfile = New-Object -TypeName Microsoft.Open.AzureAD.Model.PasswordProfile
 $passwordProfile.Password = $generatedPassword
 $passwordProfile.ForceChangePasswordNextLogin = $true
@@ -182,6 +141,13 @@ $newUser = New-AzureADUser -DisplayName $DisplayName `
 # Set usage location
 Set-AzureADUser -ObjectId $newUser.ObjectId -UsageLocation $UserLocation
 
+# Add to groups
+foreach ($GroupId in $GroupIdList) {
+    Add-AzureADGroupMember -ObjectId $GroupId -RefObjectId $newUser.ObjectId
+    Write-Host "$FirstName Added to group with ID: $GroupId."
+}
+
+
 if (-not [string]::IsNullOrWhiteSpace($SKUChoice)) {
 # Find the license
 $SKUId = $availableSKUs[$SKUChoice].SKUId
@@ -194,12 +160,6 @@ $license.SkuId = $SKUId
 $licenses = New-Object -TypeName Microsoft.Open.AzureAD.Model.AssignedLicenses
 $licenses.AddLicenses = $license
 Set-AzureADUserLicense -ObjectId $newUser.ObjectId -AssignedLicenses $licenses
-}
-
-# Add to group if chosen
-if ($GroupId) {
-    Add-AzureADGroupMember -ObjectId $GroupId -RefObjectId $newUser.ObjectId
-    Write-Host "Added to group: $GroupName"
 }
 
 # Ensure Bitwarden is unlocked
@@ -225,18 +185,18 @@ Write-Host "License: $SKUPartNumber ($SKUFriendlyName)"
 if ($GroupName) { Write-Host "Group: $GroupName" }
 Write-Host "Template:"
 Write-Host "`n--- Email to Send ---" -ForegroundColor Cyan
-Write-Host "Hi [Insert recipient name]," -ForegroundColor White
-Write-Host "" -ForegroundColor White
-Write-Host "I can confirm the account for $FirstName has been created." -ForegroundColor White
-Write-Host "" -ForegroundColor White
-Write-Host "- Email: $UPN" -ForegroundColor White
-Write-Host "- Password: available at the secure link below:" -ForegroundColor White
-Write-Host "" -ForegroundColor White
+Write-Host "Hi [Insert recipient name],"
+Write-Host ""
+Write-Host "I can confirm the account for $FirstName has been created."
+Write-Host ""
+Write-Host "- Email: $UPN"
+Write-Host "- Password: available at the secure link below:"
+Write-Host ""
 Write-Host "$link" -ForegroundColor Yellow
-Write-Host "" -ForegroundColor White
-Write-Host "Please note that this link will expire in 3 days and can only be opened up to 4 times. $FirstName will also be required to change the password when they login next." -ForegroundColor White
-Write-Host "" -ForegroundColor White
-Write-Host "Please let me know if there are any issues!" -ForegroundColor White
-Write-Host "" -ForegroundColor White
-Write-Host "Thanks," -ForegroundColor White
-Write-Host "[Your name]" -ForegroundColor White
+Write-Host ""
+Write-Host "Please note that this link will expire in 3 days and can only be opened up to 4 times. $FirstName will also be required to change the password when they login next."
+Write-Host ""
+Write-Host "Please let me know if there are any issues!"
+Write-Host ""
+Write-Host "Thanks,"
+Write-Host "[Your name]"

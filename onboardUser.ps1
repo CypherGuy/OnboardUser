@@ -1,6 +1,3 @@
-# To do:
-#	- Multiple groups
-# 
 # ===============================================================
 # Prerequisites (manual setup required before running this script)
 # ===============================================================
@@ -200,3 +197,4 @@ Write-Host "Please let me know if there are any issues!"
 Write-Host ""
 Write-Host "Thanks,"
 Write-Host "[Your name]"
+
